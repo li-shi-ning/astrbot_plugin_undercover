@@ -594,7 +594,7 @@ class UndercoverPlugin(Star):
     def _parse_int(self, text: str) -> int:
         numbers = re.findall(r"\d+", str(text or ""))
         if not numbers:
-            raise UndercoverError("格式错误，请发送“投票 编号”。")
+            raise UndercoverError("格式错误，请点击玩家名字按钮投票。")
         return int(numbers[-1])
 
     def _parse_id(self, text: str) -> int:

@@ -256,7 +256,7 @@ class UndercoverGame:
             raise UndercoverError("只有存活玩家可以发起投票。")
         self.phase = GamePhase.VOTING
         self.votes = {}
-        return [f"{player.name} 发起了投票。", "请所有存活玩家发送“投票 编号”。"]
+        return [f"{player.name} 发起了投票。", "点击玩家名字按钮，点击谁就给谁投票。"]
 
     def finish_speaking(self, user_id: str) -> list[str]:
         """End the current player's speech and pass to the next alive player."""
