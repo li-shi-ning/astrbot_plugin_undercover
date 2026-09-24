@@ -468,11 +468,11 @@ class UndercoverPlugin(Star):
             "2. 平民和卧底拿到相似但不同的词语；白板拿到“白板”。\n"
             "3. 每人点击自己的“看词”按钮查看词语，不要公开。\n"
             "4. 按顺序发言，轮到谁谁点“发言结束”按钮；讨论后点击“开始投票”。\n"
-            "5. 所有存活玩家点击“投票”按钮并输入编号。\n"
+            "5. 投票阶段会出现所有存活玩家的名字按钮，点击谁就给谁投票。\n"
             "6. 得票最多者出局，平票则无人出局。\n"
             "7. 全部卧底出局平民赢；卧底人数不少于平民时卧底赢。\n"
             "命令：卧底创建 / 卧底加入 / 卧底开始 / 卧底看 / "
-            "我的词语 / 发言结束 / 开始投票 / 投票 1 / 统计投票 / 卧底结束"
+            "我的词语 / 发言结束 / 开始投票 / 点击名字按钮投票 / 统计投票 / 卧底结束"
         )
         return CommandOutcome(text=text, buttons=self._menu_buttons())
 
@@ -549,9 +549,16 @@ class UndercoverPlugin(Star):
         return buttons
 
     def _vote_buttons(self, game: UndercoverGame) -> list[ButtonSpec]:
-        """Return one public vote button; the engine prevents duplicate votes."""
+        """Return one public button per alive player for direct voting."""
 
-        return [ButtonSpec("uc_act_vote", "投票", "投票 ")]
+        return [
+            ButtonSpec(
+                f"uc_vote_{index}",
+                player.name,
+                f"投票 {index}",
+            )
+            for index, player in enumerate(game.alive_players(), start=1)
+        ]
 
     # ------------------------------------------------------------------
     # Platform helpers

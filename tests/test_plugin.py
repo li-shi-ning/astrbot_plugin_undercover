@@ -117,6 +117,12 @@ def test_create_join_start_vote_and_eliminate_undercover(tmp_path) -> None:
     target = next(player for player in game.players if player.role == "undercover")
 
     run(collect(plugin.start_vote_command(events["u1"])))
+    vote_game = plugin.games["group-id"]
+    vote_buttons = plugin._vote_buttons(vote_game)
+    assert [button.label for button in vote_buttons] == [
+        player.name for player in vote_game.alive_players()
+    ]
+    assert all(button.only_for is None for button in vote_buttons)
 
     for user_id, event in events.items():
         game = plugin.games.get("group-id")
