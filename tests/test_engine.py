@@ -48,10 +48,12 @@ def test_vote_eliminates_player_and_civilian_win() -> None:
             player.word = game.civilian_word
 
     game.start_vote("u1")
+    lines: list[str] = []
     for player in list(game.alive_players()):
         number = 2 if player.user_id != target.user_id else 1
-        game.vote(player.user_id, number)
+        lines = game.vote(player.user_id, number)
 
+    assert not any("身份：" in line for line in lines)
     assert target.alive is False
     assert game.phase == GamePhase.FINISHED
     assert game.winner == "平民阵营获胜。"

@@ -343,10 +343,7 @@ class UndercoverGame:
             return ["平票，本轮无人出局。", "请继续发言后重新投票。"]
         eliminated = next(player for player in self.players if player.user_id == top[0])
         eliminated.alive = False
-        lines = [
-            f"{eliminated.name} 被投票出局。",
-            f"身份：{eliminated.role_label}，词语：{eliminated.word}。",
-        ]
+        lines = [f"{eliminated.name} 被投票出局。"]
         self.votes = {}
         self.current_speaker_index = 0
         winner_lines = self._check_winner()

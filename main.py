@@ -549,19 +549,9 @@ class UndercoverPlugin(Star):
         return buttons
 
     def _vote_buttons(self, game: UndercoverGame) -> list[ButtonSpec]:
-        buttons: list[ButtonSpec] = []
-        for index, player in enumerate(game.alive_players(), start=1):
-            if player.user_id in game.votes:
-                continue
-            buttons.append(
-                ButtonSpec(
-                    f"uc_vote_{index}",
-                    f"{player.name} 投票",
-                    "投票 ",
-                    only_for=player.user_id,
-                )
-            )
-        return buttons
+        """Return one public vote button; the engine prevents duplicate votes."""
+
+        return [ButtonSpec("uc_act_vote", "投票", "投票 ")]
 
     # ------------------------------------------------------------------
     # Platform helpers
