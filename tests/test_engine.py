@@ -14,6 +14,7 @@ from src.engine import (  # noqa: E402
     GamePhase,
     UndercoverError,
     UndercoverGame,
+    load_word_pairs,
 )
 
 
@@ -95,3 +96,35 @@ def test_illegal_vote_is_rejected() -> None:
         assert "当前不在投票阶段" in str(exc)
     else:  # pragma: no cover - guard against regression
         raise AssertionError("vote out of phase should fail")
+
+
+def test_speaking_order_advances_with_finish_button() -> None:
+    game = make_game(4)
+    first = game.current_speaker()
+    assert first is not None
+
+    lines = game.finish_speaking(first.user_id)
+    next_speaker = game.current_speaker()
+
+    assert next_speaker is not None
+    assert next_speaker.user_id != first.user_id
+    assert "轮到" in lines[-1]
+
+
+def test_non_speaker_cannot_finish_speaking() -> None:
+    game = make_game(4)
+    current = game.current_speaker()
+    other = next(player for player in game.alive_players() if player is not current)
+    try:
+        game.finish_speaking(other.user_id)
+    except UndercoverError as exc:
+        assert "还没有轮到你发言" in str(exc)
+    else:  # pragma: no cover - guard against regression
+        raise AssertionError("non-speaker should not finish speaking")
+
+
+def test_load_word_pairs_from_project_csv() -> None:
+    pairs = load_word_pairs(PLUGIN_DIR / "cs" / "谁是卧底词库.csv")
+
+    assert len(pairs) > 100
+    assert ("苹果", "梨") in pairs

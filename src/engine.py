@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import csv
 import random
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 ROLE_CIVILIAN = "civilian"
@@ -48,6 +50,24 @@ WORD_PAIRS: list[tuple[str, str]] = [
     ("钢琴家", "歌唱家"),
 ]
 
+
+def load_word_pairs(path: str | Path) -> list[tuple[str, str]]:
+    """Load word pairs from a UTF-8 CSV with ``分类,词语A,词语B`` columns."""
+
+    pairs: list[tuple[str, str]] = []
+    with Path(path).open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.reader(handle)
+        for row in reader:
+            if len(row) < 3:
+                continue
+            word_a = row[1].strip()
+            word_b = row[2].strip()
+            if not word_a or not word_b or word_a in {"词语A", "词A"}:
+                continue
+            pairs.append((word_a, word_b))
+    return pairs
+
+
 DEFAULT_MAX_PLAYERS = 10
 DEFAULT_MIN_PLAYERS = 4
 
@@ -85,6 +105,7 @@ class UndercoverGame:
     max_players: int = DEFAULT_MAX_PLAYERS
     undercover_count: int = 1
     blank_count: int = 0
+    word_pairs: list[tuple[str, str]] = field(default_factory=list)
     players: list[PlayerState] = field(default_factory=list)
     phase: GamePhase = GamePhase.WAITING
     round_no: int = 0
@@ -105,6 +126,14 @@ class UndercoverGame:
         """Return players who have not been eliminated."""
 
         return [player for player in self.players if player.alive]
+
+    def current_speaker(self) -> PlayerState | None:
+        """Return the player whose turn it is to speak."""
+
+        alive = self.alive_players()
+        if not alive:
+            return None
+        return alive[self.current_speaker_index % len(alive)]
 
     def alive_number(self, number: int) -> PlayerState:
         """Resolve a 1-based alive player number."""
@@ -154,7 +183,7 @@ class UndercoverGame:
         if len(self.players) < DEFAULT_MIN_PLAYERS:
             raise UndercoverError(f"至少需要 {DEFAULT_MIN_PLAYERS} 人才能开始。")
         rng = rng or random.Random()
-        civilian_word, undercover_word = rng.choice(WORD_PAIRS)
+        civilian_word, undercover_word = rng.choice(self.word_pairs or WORD_PAIRS)
         self.civilian_word = civilian_word
         self.undercover_word = undercover_word
         self.winner = None
@@ -184,10 +213,14 @@ class UndercoverGame:
                 player.word = civilian_word
         self.phase = GamePhase.SPEAKING
         self.current_speaker_index = 0
-        return [
+        first = self.current_speaker()
+        lines = [
             f"游戏开始，共 {len(self.players)} 人。",
             "请点击自己的“看词”按钮查看词语。",
         ]
+        if first is not None:
+            lines.append(f"轮到 {first.name} 发言。")
+        return lines
 
     def view_word(self, user_id: str) -> str:
         """Return the word shown to one player."""
@@ -210,6 +243,22 @@ class UndercoverGame:
         self.phase = GamePhase.VOTING
         self.votes = {}
         return [f"{player.name} 发起了投票。", "请所有存活玩家发送“投票 编号”。"]
+
+    def finish_speaking(self, user_id: str) -> list[str]:
+        """End the current player's speech and pass to the next alive player."""
+
+        if self.phase != GamePhase.SPEAKING:
+            raise UndercoverError("当前不在发言阶段。")
+        speaker = self.current_speaker()
+        if speaker is None or speaker.user_id != user_id:
+            raise UndercoverError("现在还没有轮到你发言。")
+        alive = self.alive_players()
+        self.current_speaker_index = (self.current_speaker_index + 1) % len(alive)
+        next_speaker = self.current_speaker()
+        lines = [f"{speaker.name} 发言结束。"]
+        if next_speaker is not None:
+            lines.append(f"轮到 {next_speaker.name} 发言。")
+        return lines
 
     def vote(self, voter_id: str, target_number: int) -> list[str]:
         """Record one vote, automatically tallying when everyone has voted."""
@@ -250,7 +299,11 @@ class UndercoverGame:
             GamePhase.FINISHED: "已结束",
         }
         lines = [f"阶段：{labels[self.phase]}"]
-        if self.phase != GamePhase.WAITING:
+        if self.phase == GamePhase.SPEAKING:
+            speaker = self.current_speaker()
+            if speaker is not None:
+                lines.append(f"当前发言人：{speaker.name}")
+        if self.phase == GamePhase.VOTING:
             lines.append(f"投票已投：{len(self.votes)}/{len(self.alive_players())}")
         lines.append("存活玩家：")
         for index, player in enumerate(self.alive_players(), start=1):
@@ -272,7 +325,7 @@ class UndercoverGame:
         if len(top) > 1:
             self.votes = {}
             self.phase = GamePhase.SPEAKING
-            self._advance_speaker()
+            self.current_speaker_index = 0
             return ["平票，本轮无人出局。", "请继续发言后重新投票。"]
         eliminated = next(player for player in self.players if player.user_id == top[0])
         eliminated.alive = False
@@ -281,7 +334,7 @@ class UndercoverGame:
             f"身份：{eliminated.role_label}，词语：{eliminated.word}。",
         ]
         self.votes = {}
-        self._advance_speaker()
+        self.current_speaker_index = 0
         winner_lines = self._check_winner()
         if winner_lines:
             lines.extend(winner_lines)
@@ -289,14 +342,6 @@ class UndercoverGame:
             self.phase = GamePhase.SPEAKING
             lines.append("请继续发言，之后可再次发起投票。")
         return lines
-
-    def _advance_speaker(self) -> None:
-        """Move the speaker pointer to the next alive player."""
-
-        alive = self.alive_players()
-        if not alive:
-            return
-        self.current_speaker_index = self.current_speaker_index % len(alive)
 
     def _check_winner(self) -> list[str]:
         """Set the winner and return reveal lines when the game is over."""

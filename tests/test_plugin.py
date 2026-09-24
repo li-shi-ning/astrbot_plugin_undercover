@@ -137,3 +137,30 @@ def test_menu_contains_word_and_help_buttons() -> None:
     labels = [button.label for button in plugin._menu_buttons()]
     assert "我的词语" in labels
     assert "卧底帮助" in labels
+
+
+def test_start_message_has_hidden_word_button_per_player_and_speaker_button() -> None:
+    plugin = plugin_main.UndercoverPlugin(
+        context=SimpleNamespace(),
+        config={"max_players": 10, "undercover_count": 1, "blank_count": 0},
+    )
+    events = {
+        "u1": FakeEvent("u1", "玩家1"),
+        "u2": FakeEvent("u2", "玩家2"),
+        "u3": FakeEvent("u3", "玩家3"),
+        "u4": FakeEvent("u4", "玩家4"),
+    }
+    run(collect(plugin.create_command(events["u1"])))
+    for user_id in ("u2", "u3", "u4"):
+        run(collect(plugin.join_command(events[user_id])))
+    run(collect(plugin.start_command(events["u1"])))
+
+    payload = events["u1"].bot.api.group_messages[-1]
+    keyboard = payload["keyboard"]
+    buttons = [
+        button for row in keyboard["content"]["rows"] for button in row["buttons"]
+    ]
+    labels = [button["render_data"]["label"] for button in buttons]
+
+    assert sum("看词" in label for label in labels) == 4
+    assert "发言结束" in labels

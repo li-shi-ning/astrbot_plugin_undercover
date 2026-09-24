@@ -4,6 +4,7 @@ import asyncio
 import random
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
@@ -11,7 +12,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
 try:
-    from .src.engine import GamePhase, UndercoverError, UndercoverGame
+    from .src.engine import GamePhase, UndercoverError, UndercoverGame, load_word_pairs
     from .src.qqofficial import (
         ButtonSpec,
         extract_context,
@@ -19,7 +20,7 @@ try:
         send_group_reply,
     )
 except ImportError:  # pragma: no cover - direct local import fallback
-    from src.engine import GamePhase, UndercoverError, UndercoverGame
+    from src.engine import GamePhase, UndercoverError, UndercoverGame, load_word_pairs
     from src.qqofficial import (
         ButtonSpec,
         extract_context,
@@ -54,6 +55,11 @@ class UndercoverPlugin(Star):
         self.max_players = self._config_int("max_players", 10, minimum=4, maximum=12)
         self.undercover_count = self._config_int("undercover_count", 1, minimum=1)
         self.blank_count = self._config_int("blank_count", 0, minimum=0, maximum=2)
+        word_file = Path(__file__).resolve().parent / "cs" / "谁是卧底词库.csv"
+        try:
+            self.word_pairs = load_word_pairs(word_file)
+        except OSError:
+            self.word_pairs = []
         self.games: dict[str, UndercoverGame] = {}
         self.group_locks: dict[str, asyncio.Lock] = {}
 
@@ -116,6 +122,12 @@ class UndercoverPlugin(Star):
     @filter.command("开始投票", alias={"卧底投票"})
     async def start_vote_command(self, event: AstrMessageEvent):
         async for result in self._handle_command(event, "start_vote"):
+            yield result
+        event.stop_event()
+
+    @filter.command("发言结束", alias={"结束发言"})
+    async def finish_speaking_command(self, event: AstrMessageEvent):
+        async for result in self._handle_command(event, "finish_speaking"):
             yield result
         event.stop_event()
 
@@ -191,6 +203,8 @@ class UndercoverPlugin(Star):
             return self._show_word(group_id)
         if command == "start_vote":
             return self._start_vote(group_id, user_id)
+        if command == "finish_speaking":
+            return self._finish_speaking(group_id, user_id)
         if command == "vote":
             return self._vote(group_id, user_id, self._message_text(event))
         if command == "tally":
@@ -212,6 +226,7 @@ class UndercoverPlugin(Star):
             max_players=self.max_players,
             undercover_count=self.undercover_count,
             blank_count=self.blank_count,
+            word_pairs=self.word_pairs,
         )
         game.add_player(user_id, name)
         self.games[group_id] = game
@@ -271,6 +286,12 @@ class UndercoverPlugin(Star):
             raise UndercoverError("当前没有谁是卧底房间。")
         return self._action_outcome(group_id, game.start_vote(user_id))
 
+    def _finish_speaking(self, group_id: str, user_id: str) -> CommandOutcome:
+        game = self.games.get(group_id)
+        if game is None:
+            raise UndercoverError("当前没有谁是卧底房间。")
+        return self._action_outcome(group_id, game.finish_speaking(user_id))
+
     def _vote(self, group_id: str, user_id: str, text: str) -> CommandOutcome:
         game = self.games.get(group_id)
         if game is None:
@@ -313,11 +334,12 @@ class UndercoverPlugin(Star):
             "1. 玩家分成平民、卧底，可能还有白板。\n"
             "2. 平民和卧底拿到相似但不同的词语；白板拿到“白板”。\n"
             "3. 每人点击自己的“看词”按钮查看词语，不要公开。\n"
-            "4. 讨论后点击“开始投票”；所有存活玩家点击“投票”按钮并输入编号。\n"
-            "5. 得票最多者出局，平票则无人出局。\n"
-            "6. 全部卧底出局平民赢；卧底人数不少于平民时卧底赢。\n"
+            "4. 按顺序发言，轮到谁谁点“发言结束”按钮；讨论后点击“开始投票”。\n"
+            "5. 所有存活玩家点击“投票”按钮并输入编号。\n"
+            "6. 得票最多者出局，平票则无人出局。\n"
+            "7. 全部卧底出局平民赢；卧底人数不少于平民时卧底赢。\n"
             "命令：卧底创建 / 卧底加入 / 卧底开始 / 卧底看 / "
-            "我的词语 / 开始投票 / 投票 1 / 统计投票 / 卧底结束"
+            "我的词语 / 发言结束 / 开始投票 / 投票 1 / 统计投票 / 卧底结束"
         )
         return CommandOutcome(text=text, buttons=self._menu_buttons())
 
@@ -342,6 +364,16 @@ class UndercoverPlugin(Star):
             ]
         if game.phase == GamePhase.SPEAKING:
             buttons = self._word_buttons(game)
+            speaker = game.current_speaker()
+            if speaker is not None:
+                buttons.append(
+                    ButtonSpec(
+                        "uc_act_finish_speaking",
+                        "发言结束",
+                        "发言结束",
+                        only_for=speaker.user_id,
+                    )
+                )
             buttons.extend(
                 [
                     ButtonSpec("uc_act_start_vote", "开始投票", "开始投票"),
