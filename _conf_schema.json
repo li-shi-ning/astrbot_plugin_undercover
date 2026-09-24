@@ -1,0 +1,20 @@
+{
+  "max_players": {
+    "description": "每局最多玩家数。",
+    "type": "int",
+    "default": 10,
+    "hint": "至少 4 人，最多 12 人。"
+  },
+  "undercover_count": {
+    "description": "每局卧底数量。",
+    "type": "int",
+    "default": 1,
+    "hint": "默认 1 名卧底。"
+  },
+  "blank_count": {
+    "description": "每局白板数量。",
+    "type": "int",
+    "default": 0,
+    "hint": "白板拿到的词语是“白板”，可以选择开启。"
+  }
+}
