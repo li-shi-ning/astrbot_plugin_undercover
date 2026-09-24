@@ -9,24 +9,38 @@ from typing import Any
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, StarTools, register
 
 try:
-    from .src.engine import GamePhase, UndercoverError, UndercoverGame, load_word_pairs
+    from .src.engine import (
+        WORD_PAIRS,
+        GamePhase,
+        UndercoverError,
+        UndercoverGame,
+        load_word_pairs,
+    )
     from .src.qqofficial import (
         ButtonSpec,
         extract_context,
         is_qqofficial_event,
         send_group_reply,
     )
+    from .src.storage import UndercoverStore
 except ImportError:  # pragma: no cover - direct local import fallback
-    from src.engine import GamePhase, UndercoverError, UndercoverGame, load_word_pairs
+    from src.engine import (
+        WORD_PAIRS,
+        GamePhase,
+        UndercoverError,
+        UndercoverGame,
+        load_word_pairs,
+    )
     from src.qqofficial import (
         ButtonSpec,
         extract_context,
         is_qqofficial_event,
         send_group_reply,
     )
+    from src.storage import UndercoverStore
 
 
 PLUGIN_NAME = "astrbot_plugin_undercover"
@@ -60,13 +74,32 @@ class UndercoverPlugin(Star):
             self.word_pairs = load_word_pairs(word_file)
         except OSError:
             self.word_pairs = []
+        self.data_dir = self.config.get("data_dir")
+        self.store: UndercoverStore | None = None
         self.games: dict[str, UndercoverGame] = {}
         self.group_locks: dict[str, asyncio.Lock] = {}
 
     async def initialize(self) -> None:
-        """Initialize the plugin."""
+        """Initialize the plugin and SQLite word store."""
 
+        await self._ensure_store()
         logger.info("[Undercover] initialized")
+
+    async def _ensure_store(self) -> None:
+        """Create the SQLite word store on first use."""
+
+        if self.store is not None:
+            return
+        base = (
+            Path(str(self.data_dir))
+            if self.data_dir
+            else Path(StarTools.get_data_dir(PLUGIN_NAME))
+        )
+        self.store = UndercoverStore(base / "undercover.sqlite3")
+        await self.store.init_db()
+        pairs = self.word_pairs or WORD_PAIRS
+        if pairs:
+            await self.store.import_builtin_pairs(pairs)
 
     async def terminate(self) -> None:
         """Drop all in-memory games on plugin unload."""
@@ -116,6 +149,30 @@ class UndercoverPlugin(Star):
     @filter.command("我的词语", alias={"查看词语", "卧底看词"})
     async def word_command(self, event: AstrMessageEvent):
         async for result in self._handle_command(event, "word"):
+            yield result
+        event.stop_event()
+
+    @filter.command("词库状态", alias={"卧底词库状态"})
+    async def word_stats_command(self, event: AstrMessageEvent):
+        async for result in self._handle_command(event, "word_stats"):
+            yield result
+        event.stop_event()
+
+    @filter.command("自定义词库", alias={"词库列表", "卧底词库"})
+    async def custom_words_command(self, event: AstrMessageEvent):
+        async for result in self._handle_command(event, "custom_words"):
+            yield result
+        event.stop_event()
+
+    @filter.command("添加词库", alias={"卧底添加词库"})
+    async def add_words_command(self, event: AstrMessageEvent):
+        async for result in self._handle_command(event, "add_words"):
+            yield result
+        event.stop_event()
+
+    @filter.command("删除自定义词库", alias={"删除词库"})
+    async def delete_words_command(self, event: AstrMessageEvent):
+        async for result in self._handle_command(event, "delete_words"):
             yield result
         event.stop_event()
 
@@ -196,11 +253,19 @@ class UndercoverPlugin(Star):
         if command == "leave":
             return self._leave_game(group_id, user_id)
         if command == "start":
-            return self._start_game(event, group_id, user_id)
+            return await self._start_game(event, group_id, user_id)
         if command == "status":
             return self._show_status(group_id)
         if command == "word":
             return self._show_word(group_id)
+        if command == "word_stats":
+            return await self._word_stats()
+        if command == "custom_words":
+            return await self._custom_words()
+        if command == "add_words":
+            return await self._add_words(self._message_text(event))
+        if command == "delete_words":
+            return await self._delete_words(self._message_text(event))
         if command == "start_vote":
             return self._start_vote(group_id, user_id)
         if command == "finish_speaking":
@@ -253,7 +318,7 @@ class UndercoverPlugin(Star):
         game.remove_player(user_id)
         return CommandOutcome(text="已退出房间。", game=game)
 
-    def _start_game(
+    async def _start_game(
         self, event: AstrMessageEvent, group_id: str, user_id: str
     ) -> CommandOutcome:
         game = self.games.get(group_id)
@@ -263,7 +328,21 @@ class UndercoverPlugin(Star):
             raise UndercoverError("游戏已经开始。")
         if user_id != game.owner_id and not self._is_admin(event):
             raise UndercoverError("只有房主或管理员可以开始游戏。")
-        lines = game.start_game(random.Random())
+        if len(game.players) < 4:
+            raise UndercoverError("至少需要 4 名玩家才能开始。")
+        await self._ensure_store()
+        assert self.store is not None
+        claimed = await self.store.claim_unused_pair()
+        if claimed is None:
+            raise UndercoverError("词库已用完，请添加自定义词库或重置词库。")
+        pair_id, pair = claimed
+        rng = random.Random()
+        oriented = rng.choice([pair, (pair[1], pair[0])])
+        try:
+            lines = game.start_game(rng, word_pair=oriented)
+        except Exception:
+            await self.store.release_pair(pair_id)
+            raise
         return CommandOutcome(text="\n".join(lines), game=game)
 
     def _show_status(self, group_id: str) -> CommandOutcome:
@@ -278,6 +357,60 @@ class UndercoverPlugin(Star):
             raise UndercoverError("当前没有正在进行的游戏。")
         return CommandOutcome(
             text="看词。", game=game, buttons=self._word_buttons(game)
+        )
+
+    async def _word_stats(self) -> CommandOutcome:
+        await self._ensure_store()
+        assert self.store is not None
+        stats = await self.store.stats()
+        text = (
+            "词库状态：\n"
+            f"总数：{stats['total']}\n"
+            f"内置：{stats['builtin']}\n"
+            f"自定义：{stats['custom']}\n"
+            f"已使用：{stats['used']}\n"
+            f"未使用：{stats['unused']}"
+        )
+        return CommandOutcome(text=text, buttons=self._menu_buttons())
+
+    async def _custom_words(self) -> CommandOutcome:
+        await self._ensure_store()
+        assert self.store is not None
+        rows = await self.store.list_custom(limit=50)
+        if not rows:
+            return CommandOutcome(
+                text="当前没有自定义词库。", buttons=self._menu_buttons()
+            )
+        lines = ["自定义词库："]
+        for row in rows:
+            state = "已使用" if int(row["used"]) else "未使用"
+            lines.append(f"#{row['id']} {row['word_a']} / {row['word_b']}（{state}）")
+        lines.append("删除请发送：删除自定义词库 编号")
+        return CommandOutcome(text="\n".join(lines), buttons=self._menu_buttons())
+
+    async def _add_words(self, text: str) -> CommandOutcome:
+        await self._ensure_store()
+        assert self.store is not None
+        word_a, word_b = self._parse_word_pair(text)
+        pair_id = await self.store.add_custom(word_a, word_b)
+        stats = await self.store.stats()
+        return CommandOutcome(
+            text=(
+                f"已添加自定义词库 #{pair_id}：{word_a} / {word_b}\n"
+                f"当前自定义词库：{stats['custom']} 组，未使用：{stats['unused']} 组。"
+            ),
+            buttons=self._menu_buttons(),
+        )
+
+    async def _delete_words(self, text: str) -> CommandOutcome:
+        await self._ensure_store()
+        assert self.store is not None
+        pair_id = self._parse_id(text)
+        deleted = await self.store.delete_custom(pair_id)
+        if not deleted:
+            raise UndercoverError("未找到该自定义词库，或内置词库不能删除。")
+        return CommandOutcome(
+            text=f"已删除自定义词库 #{pair_id}。", buttons=self._menu_buttons()
         )
 
     def _start_vote(self, group_id: str, user_id: str) -> CommandOutcome:
@@ -350,6 +483,10 @@ class UndercoverPlugin(Star):
             ButtonSpec("uc_menu_start", "开始", "卧底开始"),
             ButtonSpec("uc_menu_status", "状态", "卧底看"),
             ButtonSpec("uc_menu_word", "我的词语", "我的词语"),
+            ButtonSpec("uc_menu_add_word", "添加词库", "添加词库 "),
+            ButtonSpec("uc_menu_custom_word", "自定义词库", "自定义词库"),
+            ButtonSpec("uc_menu_delete_word", "删除自定义词库", "删除自定义词库 "),
+            ButtonSpec("uc_menu_word_stats", "词库状态", "词库状态"),
             ButtonSpec("uc_menu_help", "卧底帮助", "卧底帮助"),
             ButtonSpec("uc_menu_end", "结束", "卧底结束"),
         ]
@@ -462,6 +599,18 @@ class UndercoverPlugin(Star):
         if not numbers:
             raise UndercoverError("格式错误，请发送“投票 编号”。")
         return int(numbers[-1])
+
+    def _parse_id(self, text: str) -> int:
+        numbers = re.findall(r"\d+", str(text or ""))
+        if not numbers:
+            raise UndercoverError("格式错误，请发送“删除自定义词库 编号”。")
+        return int(numbers[-1])
+
+    def _parse_word_pair(self, text: str) -> tuple[str, str]:
+        match = re.search(r"(?:添加词库|卧底添加词库)\s+(\S+)\s+(\S+)", str(text or ""))
+        if not match:
+            raise UndercoverError("格式错误，请发送“添加词库 词语A 词语B”。")
+        return match.group(1), match.group(2)
 
     def _config_int(
         self,

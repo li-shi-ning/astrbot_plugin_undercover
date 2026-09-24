@@ -175,15 +175,28 @@ class UndercoverGame:
             raise UndercoverError("房主不能退出，请直接结束房间。")
         self.players.remove(player)
 
-    def start_game(self, rng: random.Random | None = None) -> list[str]:
-        """Assign words and roles, then enter the speaking phase."""
+    def start_game(
+        self,
+        rng: random.Random | None = None,
+        word_pair: tuple[str, str] | None = None,
+    ) -> list[str]:
+        """Assign words and roles, then enter the speaking phase.
+
+        Args:
+            rng: Optional random source.
+            word_pair: Optional orientation-specific pair ``(civilian, undercover)``
+                drawn from the SQL word store.
+        """
 
         if self.phase != GamePhase.WAITING:
             raise UndercoverError("游戏已经开始。")
         if len(self.players) < DEFAULT_MIN_PLAYERS:
             raise UndercoverError(f"至少需要 {DEFAULT_MIN_PLAYERS} 人才能开始。")
         rng = rng or random.Random()
-        civilian_word, undercover_word = rng.choice(self.word_pairs or WORD_PAIRS)
+        if word_pair is None:
+            civilian_word, undercover_word = rng.choice(self.word_pairs or WORD_PAIRS)
+        else:
+            civilian_word, undercover_word = word_pair
         self.civilian_word = civilian_word
         self.undercover_word = undercover_word
         self.winner = None
@@ -193,14 +206,15 @@ class UndercoverGame:
             player.alive = True
             player.role = ROLE_CIVILIAN
             player.word = civilian_word
-        order = list(self.players)
-        rng.shuffle(order)
+        rng.shuffle(self.players)
         role_order: list[str] = []
-        role_order.extend([ROLE_UNDERCOVER] * min(self.undercover_count, len(order)))
-        remaining = len(order) - len(role_order)
+        role_order.extend(
+            [ROLE_UNDERCOVER] * min(self.undercover_count, len(self.players))
+        )
+        remaining = len(self.players) - len(role_order)
         blank = min(self.blank_count, max(0, remaining - 1))
         role_order.extend([ROLE_BLANK] * blank)
-        while len(role_order) < len(order):
+        while len(role_order) < len(self.players):
             role_order.append(ROLE_CIVILIAN)
         rng.shuffle(role_order)
         for player, role in zip(self.players, role_order):

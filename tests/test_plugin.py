@@ -88,10 +88,15 @@ async def collect(asyncgen) -> list:
     return [item async for item in asyncgen]
 
 
-def test_create_join_start_vote_and_eliminate_undercover() -> None:
+def test_create_join_start_vote_and_eliminate_undercover(tmp_path) -> None:
     plugin = plugin_main.UndercoverPlugin(
         context=SimpleNamespace(),
-        config={"max_players": 10, "undercover_count": 1, "blank_count": 0},
+        config={
+            "max_players": 10,
+            "undercover_count": 1,
+            "blank_count": 0,
+            "data_dir": str(tmp_path),
+        },
     )
     events = {
         "u1": FakeEvent("u1", "玩家1"),
@@ -105,6 +110,8 @@ def test_create_join_start_vote_and_eliminate_undercover() -> None:
         run(collect(plugin.join_command(events[user_id])))
     run(collect(plugin.start_command(events["u1"])))
 
+    assert plugin.store is not None
+    assert run(plugin.store.stats())["used"] == 1
     game = plugin.games["group-id"]
     assert game.phase.value == "speaking"
     target = next(player for player in game.players if player.role == "undercover")
@@ -136,13 +143,42 @@ def test_menu_contains_word_and_help_buttons() -> None:
     plugin = plugin_main.UndercoverPlugin(context=SimpleNamespace(), config={})
     labels = [button.label for button in plugin._menu_buttons()]
     assert "我的词语" in labels
+    assert "添加词库" in labels
+    assert "自定义词库" in labels
+    assert "删除自定义词库" in labels
+    assert "词库状态" in labels
     assert "卧底帮助" in labels
 
 
-def test_start_message_has_hidden_word_button_per_player_and_speaker_button() -> None:
+def test_add_and_delete_custom_word_commands(tmp_path) -> None:
+    plugin = plugin_main.UndercoverPlugin(
+        context=SimpleNamespace(), config={"data_dir": str(tmp_path)}
+    )
+    event = FakeEvent("u1", "玩家1")
+    event.message_str = "添加词库 测试词甲 测试词乙"
+    run(collect(plugin.add_words_command(event)))
+
+    assert plugin.store is not None
+    rows = run(plugin.store.list_custom())
+    assert len(rows) == 1
+    pair_id = int(rows[0]["id"])
+
+    event.message_str = f"删除自定义词库 {pair_id}"
+    run(collect(plugin.delete_words_command(event)))
+    assert run(plugin.store.list_custom()) == []
+
+
+def test_start_message_has_hidden_word_button_per_player_and_speaker_button(
+    tmp_path,
+) -> None:
     plugin = plugin_main.UndercoverPlugin(
         context=SimpleNamespace(),
-        config={"max_players": 10, "undercover_count": 1, "blank_count": 0},
+        config={
+            "max_players": 10,
+            "undercover_count": 1,
+            "blank_count": 0,
+            "data_dir": str(tmp_path),
+        },
     )
     events = {
         "u1": FakeEvent("u1", "玩家1"),

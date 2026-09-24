@@ -1,7 +1,7 @@
 name: astrbot_plugin_undercover
 display_name: 谁是卧底
-desc: QQ 官方群聊谁是卧底游戏，支持按钮看词、投票、淘汰、身份公开和自动结算。
-version: v1.0.0
+desc: QQ 官方群聊谁是卧底游戏，支持按钮看词、发言、投票、身份公开、SQLite 词库和自定义词库管理。
+version: v1.1.0
 author: Codex
 repo: ""
 astrbot_version: ">=4.0.0"
